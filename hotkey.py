@@ -24,17 +24,20 @@ import logging
 import time
 
 import Quartz
-from AppKit import NSEvent, NSEventMaskFlagsChanged
+from AppKit import NSEvent, NSEventMaskFlagsChanged, NSEventMaskKeyDown
 from PyObjCTools import AppHelper
 
 import config
 
 
 class HotkeyMonitor:
-    def __init__(self, on_ptt_down, on_ptt_up, on_toggle):
+    def __init__(self, on_ptt_down, on_ptt_up, on_toggle, on_improve=None):
         self.on_ptt_down = on_ptt_down
         self.on_ptt_up = on_ptt_up
         self.on_toggle = on_toggle
+        self.on_improve = on_improve
+        self._key_global = None
+        self._key_local = None
         self._right_option_down = False
         self._right_control_down = False
         # Double-tap / hold disambiguation for Right Option.
@@ -79,6 +82,22 @@ class HotkeyMonitor:
             self._local_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
                 mask, _local
             )
+
+            # Separate keyDown monitors for the Ctrl+Opt+I improve chord. Only
+            # NSEvent (Accessibility) — no event tap — so no Input Monitoring
+            # dependency and a single delivery source (no double-fire).
+            if self.on_improve is not None:
+                self._key_global = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                    NSEventMaskKeyDown, lambda e: self._from_keydown(e)
+                )
+
+                def _key_local(event):
+                    self._from_keydown(event)
+                    return event
+
+                self._key_local = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+                    NSEventMaskKeyDown, _key_local
+                )
         except Exception:
             logging.exception("NSEvent monitor registration failed")
 
@@ -115,6 +134,20 @@ class HotkeyMonitor:
             self._process(event.keyCode(), int(event.modifierFlags()), "nsevent")
         except Exception:
             logging.exception("nsevent handler error")
+
+    def _from_keydown(self, event) -> None:
+        """Fire on_improve for Ctrl+Opt+I (Command/Shift must NOT be held, so it
+        never collides with browser ⌥⌘I devtools etc.)."""
+        try:
+            if event.keyCode() != config.KEY_I:
+                return
+            flags = int(event.modifierFlags())
+            mods = flags & (config.MOD_CONTROL | config.MOD_OPTION
+                            | config.MOD_COMMAND | config.MOD_SHIFT)
+            if mods == (config.MOD_CONTROL | config.MOD_OPTION):
+                self.on_improve()
+        except Exception:
+            logging.exception("keydown handler error")
 
     def _from_tap(self, proxy, type_, event, refcon):
         try:

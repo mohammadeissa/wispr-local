@@ -106,6 +106,35 @@ def cleanup(raw: str) -> str:
     return text
 
 
+def improve_text(text: str) -> str:
+    """Rewrite selected prose for grammar/clarity. Returns the original text
+    unchanged on any failure or if the model tries to answer instead of edit."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        r = _get_client().chat(
+            model=config.CONFIG["llm_model"],
+            messages=[
+                {"role": "system", "content": config.IMPROVE_SYSTEM_PROMPT},
+                {"role": "user", "content": f"<text>{text}</text>"},
+            ],
+            options={"temperature": config.CONFIG["improve_temperature"], "top_p": 0.9},
+            keep_alive=-1,
+            stream=False,
+        )
+        out = r["message"]["content"] or ""
+    except Exception:
+        logging.exception("ollama improve failed — leaving text unchanged")
+        return text
+
+    improved, hijacked = sanitize(text, out)
+    if hijacked:
+        logging.warning("improve output rejected by guard — leaving text unchanged. out=%r", out[:200])
+        return text
+    return improved
+
+
 def apply_voice_commands(text: str) -> tuple[str, bool]:
     """Convert spoken structure commands to characters.
 

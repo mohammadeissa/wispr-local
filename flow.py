@@ -56,7 +56,9 @@ class WisprApp(rumps.App):
         self.recorder = audio.AudioRecorder()
         self.transcriber = stt.Transcriber()
         self.overlay = None  # built post-launch on the main thread
-        self.hotkeys = HotkeyMonitor(self._on_ptt_down, self._on_ptt_up, self._on_toggle)
+        self.hotkeys = HotkeyMonitor(
+            self._on_ptt_down, self._on_ptt_up, self._on_toggle, self._on_improve
+        )
 
         # Menu
         self.status_item = rumps.MenuItem("Status: loading models…")
@@ -64,11 +66,15 @@ class WisprApp(rumps.App):
         self._retitle_handsfree()
         self.model_item = rumps.MenuItem(f"Cleanup model: {config.CONFIG['llm_model']}")
         self.stt_item = rumps.MenuItem(f"STT model: {config.CONFIG['stt_model'].split('/')[-1]}")
+        self.improve_item = rumps.MenuItem(
+            "✨ Improve selection (⌃⌥I)", callback=self._improve_menu
+        )
         self.dict_item = rumps.MenuItem("Edit dictionary…", callback=self._edit_dictionary)
         self.copy_item = rumps.MenuItem("Copy last transcript", callback=self._copy_last)
         self.menu = [
             self.status_item,
             None,
+            self.improve_item,
             self.handsfree_item,
             self.model_item,
             self.stt_item,
@@ -147,6 +153,58 @@ class WisprApp(rumps.App):
             self._stop_and_process()
         else:
             self._start_recording("toggle")
+
+    # --- improve selected writing (Ctrl+Opt+I / menu) -------------------------
+
+    def _improve_menu(self, _):
+        self._on_improve()
+
+    def _on_improve(self):
+        """Grab the selection, rewrite it via the local LLM, paste it back."""
+        if not config.CONFIG["improve_enabled"]:
+            return
+        with self._state_lock:
+            if self.state != IDLE:
+                return  # busy dictating/processing — ignore
+            self.state = PROCESSING
+        threading.Thread(
+            target=self._improve_pipeline, daemon=True, name="improve"
+        ).start()
+
+    def _improve_pipeline(self):
+        AppHelper.callAfter(self._set_title, TITLE_PROCESSING)
+        saved = None
+        try:
+            if inject.is_secure_input():
+                self._notify("Wispr Local", "Can't edit here — a password field is active")
+                return
+            saved = inject.save_clipboard()
+            selected = inject.capture_selection()
+            if not selected or not selected.strip():
+                self._notify("Wispr Local", "Select some text first, then press ⌃⌥I")
+                return
+            improved = cleanup.improve_text(selected)
+            if not improved or not improved.strip():
+                self._notify("Wispr Local", "Improve failed — see ~/.wispr-local/wispr.log")
+                return
+            logging.info("improve: %d -> %d chars", len(selected), len(improved))
+            inject.set_clipboard(improved)
+            time.sleep(0.06)  # let the pasteboard propagate before Cmd+V
+            inject.paste()
+            time.sleep(config.CONFIG["restore_delay"])
+            self.last_cleaned = improved
+        except Exception:
+            logging.exception("improve pipeline failed")
+            self._notify("Wispr Local", "Improve failed — see ~/.wispr-local/wispr.log")
+        finally:
+            if saved is not None:
+                inject.restore_clipboard(saved)
+            with self._state_lock:
+                self.state = IDLE
+            AppHelper.callAfter(self._set_title, TITLE_IDLE)
+
+    def _set_title(self, title: str):
+        self.title = title
 
     # --- state machine ----------------------------------------------------------
 

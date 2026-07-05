@@ -1,0 +1,10 @@
+# Wispr Local — Apple Silicon macOS only
+mlx-whisper                          # Metal-accelerated Whisper STT
+sounddevice                          # PortAudio mic capture
+numpy
+ollama                               # local LLM client (cleanup step)
+rumps                                # menu-bar app
+pyobjc-framework-Cocoa               # AppKit: NSEvent, NSPasteboard, NSPanel
+pyobjc-framework-Quartz              # CGEvent keystroke synthesis
+pyobjc-framework-ApplicationServices # Accessibility (AXIsProcessTrusted*)
+soundfile                            # WAV fallback path for STT
